@@ -1,8 +1,8 @@
 import WebSocket, { WebSocketServer } from 'ws';
 
-const wss = new WebSocketServer({ port: 3000 });
-
 let players = [];
+
+const wss = new WebSocketServer({ port: 3000 });
 
 wss.on('connection', (ws) => {
   ws.on('message', (message) => {
@@ -11,7 +11,16 @@ wss.on('connection', (ws) => {
     try {
       const parsed = JSON.parse(message.toString());
 
-      if (parsed.type === 'reg') {
+      if (typeof parsed.data === 'string') {
+        try {
+          parsed.data = JSON.parse(parsed.data);
+        } catch (e) {
+          console.error('Invalid nested data JSON format');
+          return;
+        }
+      }
+
+      if (typeof parsed.type === 'reg') {
         const { name, password } = parsed.data;
 
         let player = players.find(p => p.name === name);
@@ -24,9 +33,9 @@ wss.on('connection', (ws) => {
             type: 'reg',
             data: {
               name,
-              index: -1,
+              password,
               error: true,
-              errorText: 'Invalid password'
+              errorText: "Wrong password"
             },
             id: 0
           }));
