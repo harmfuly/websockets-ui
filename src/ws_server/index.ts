@@ -41,16 +41,28 @@ function send(ws: CustomWebSocket, type: string, dataObj: any): void {
   }));
 }
 
+function broadcastRooms() {
+  const roomsData = games
+    .filter(game => game.players.length === 1)
+    .map(game => ({
+      roomId: game.gameId,
+      roomUsers: game.players.map(p => ({ name: p.name, index: p.playerId })),
+    }));
+
+  wss.clients.forEach(client => {
+    const ws = client as CustomWebSocket;
+    if (ws.readyState === WebSocket.OPEN) {
+      send(ws, 'update_room', roomsData);
+    }
+  });
+}
+
 function broadcastWinners(): void {
   const winnersList = players.map(p => ({ name: p.name, wins: p.wins }));
   wss.clients.forEach(client => {
     const ws = client as CustomWebSocket;
     if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'update_winners',
-        data: JSON.stringify(winnersList),
-        id: 0
-      }));
+      send(ws, 'update_winners', winnersList);
     }
   });
 }
@@ -70,9 +82,9 @@ wss.on('connection', (ws: CustomWebSocket) => {
 
     let data: any;
     try {
-      data = JSON.parse(parsed.data);
+      data = parsed.data ? JSON.parse(parsed.data) : {};
     } catch {
-      send(ws, 'reg', { error: true, errorText: 'Invalid data format' });
+      send(ws, parsed.type, { error: true, errorText: 'Invalid data format' });
       return;
     }
 
@@ -94,6 +106,7 @@ wss.on('connection', (ws: CustomWebSocket) => {
         }
 
         ws.playerName = name;
+
         send(ws, 'reg', {
           name,
           index: players.indexOf(player),
@@ -101,13 +114,16 @@ wss.on('connection', (ws: CustomWebSocket) => {
           errorText: ""
         });
 
+        broadcastRooms();
+
         broadcastWinners();
+
         break;
       }
 
-      case 'create_game': {
+      case 'create_room': {
         if (!ws.playerName) {
-          send(ws, 'create_game', { error: true, errorText: 'Not logged in' });
+          send(ws, 'create_room', { error: true, errorText: 'Not logged in' });
           return;
         }
 
@@ -123,56 +139,47 @@ wss.on('connection', (ws: CustomWebSocket) => {
 
         games.push(newGame);
 
-        send(ws, 'create_game', { gameId, playerId, error: false, errorText: "" });
+        send(ws, 'create_room', { gameId, playerId, error: false, errorText: "" });
+
+        broadcastRooms();
+
         break;
       }
 
-      case 'join_game': {
+      case 'add_user_to_room': {
         if (!ws.playerName) {
-          send(ws, 'join_game', { error: true, errorText: 'Not logged in' });
+          send(ws, 'add_user_to_room', { error: true, errorText: 'Not logged in' });
           return;
         }
 
-        const { gameId } = data;
-        const game = games.find(g => g.gameId === gameId);
+        const { indexRoom } = data;
+        const game = games.find(g => g.gameId === indexRoom);
         if (!game) {
-          send(ws, 'join_game', { error: true, errorText: 'Game not found' });
+          send(ws, 'add_user_to_room', { error: true, errorText: 'Room not found' });
           return;
         }
 
-        if (game.players.some(p => p.name === ws.playerName)) {
-          send(ws, 'join_game', { error: true, errorText: 'Already joined' });
+        if (game.players.find(p => p.name === ws.playerName)) {
+          send(ws, 'add_user_to_room', { error: true, errorText: 'Already in room' });
+          return;
+        }
+
+        if (game.players.length >= 2) {
+          send(ws, 'add_user_to_room', { error: true, errorText: 'Room full' });
           return;
         }
 
         const playerId = `${ws.playerName}_${Math.floor(Math.random() * 10000)}`;
         game.players.push({ name: ws.playerName, playerId });
 
-        send(ws, 'join_game', { gameId, playerId, error: false, errorText: "" });
-        break;
-      }
 
-      case 'start_game': {
-        const { gameId, shipsPositions } = data;
-        const game = games.find(g => g.gameId === gameId);
-        if (!game) {
-          send(ws, 'start_game', { error: true, errorText: 'Game not found' });
-          return;
-        }
+        broadcastRooms();
 
-        if (!game.players.some(p => p.name === ws.playerName)) {
-          send(ws, 'start_game', { error: true, errorText: 'Not in game' });
-          return;
-        }
-
-        game.shipsPositions = shipsPositions;
-        game.state = 'started';
-
-        game.players.forEach(({ name }) => {
+        game.players.forEach(({ name, playerId }) => {
           wss.clients.forEach(client => {
-            const clientWs = client as CustomWebSocket;
-            if (clientWs.readyState === WebSocket.OPEN && clientWs.playerName === name) {
-              send(clientWs, 'start_game', { gameId, shipsPositions });
+            const wsClient = client as CustomWebSocket;
+            if (wsClient.playerName === name && wsClient.readyState === WebSocket.OPEN) {
+              send(wsClient, 'create_game', { idGame: game.gameId, idPlayer: playerId });
             }
           });
         });
@@ -181,8 +188,13 @@ wss.on('connection', (ws: CustomWebSocket) => {
       }
 
       default:
-        send(ws, 'error', { error: true, errorText: 'Unknown command' });
+        send(ws, parsed.type, { error: true, errorText: 'Unknown message type' });
+        break;
     }
+  });
+
+  ws.on('close', () => {
+    console.log(`Client disconnected: ${ws.playerName}`);
   });
 });
 
