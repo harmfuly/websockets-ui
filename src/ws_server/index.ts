@@ -34,12 +34,15 @@ const games: Game[] = [];
 const wss = new WebSocketServer({ port: 3000 });
 
 function send(ws: CustomWebSocket, type: string, dataObj: any): void {
-  ws.send(JSON.stringify({
+  const message = JSON.stringify({
     type,
     data: JSON.stringify(dataObj),
     id: 0
-  }));
+  });
+  console.log("Sending:", message);
+  ws.send(message);
 }
+
 
 function broadcastRooms() {
   const roomsData = games
